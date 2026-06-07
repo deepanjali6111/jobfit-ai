@@ -1,0 +1,20 @@
+# Environment variables — never commit these
+backend/.env
+frontend/.streamlit/secrets.toml
+
+# Python virtual environments
+backend/.venv/
+frontend/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
