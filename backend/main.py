@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from auth.jwt_validator import get_current_user
+from routers.upload import router as upload_router
 
 app = FastAPI(title="JobFit AI")
 
-# Allow Streamlit frontend to call this backend
+# ── CORS — allows Streamlit to call FastAPI ──────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,19 +14,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Routers ──────────────────────────────────────────────────
+app.include_router(upload_router)
 
+
+# ── Health check ─────────────────────────────────────────────
 @app.get("/")
 def health():
     return {"status": "healthy"}
 
 
-@app.get("/protected-test")
-def protected_test(user_id: str = Depends(get_current_user)):
-    """
-    Test endpoint — confirms JWT validation works.
-    Remove this after Milestone 1 is verified.
-    """
+# ── Protected test endpoint ──────────────────────────────────
+@app.get("/me")
+async def get_me(user_id: str = Depends(get_current_user)):
     return {
-        "message": "Token is valid",
-        "user_id": user_id
+        "user_id": user_id,
+        "message": "Token is valid. Auth working correctly."
     }
