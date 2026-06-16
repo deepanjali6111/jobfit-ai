@@ -22,12 +22,6 @@ def call_gemini(prompt: str) -> str:
     """
     Calls Gemini with key rotation.
     Tries each key in order, waits 5s before moving to next on rate limit.
-
-    Returns:
-        Raw text response from Gemini
-
-    Raises:
-        RuntimeError: If all keys are exhausted
     """
     last_error = None
 
@@ -45,16 +39,13 @@ def call_gemini(prompt: str) -> str:
             error_str = str(e).lower()
 
             if "429" in str(e) or "quota" in error_str or "rate" in error_str:
-                # Wait before trying next key
                 wait = 5 if i < len(GEMINI_KEYS) - 1 else 0
                 if wait:
                     time.sleep(wait)
                 continue
 
-            # Not a quota error — re-raise immediately
             raise e
 
-    # All keys failed
     raise RuntimeError(
         "Daily AI quota reached. Results available again after midnight. "
         "Your resume profile is saved — just come back tomorrow."
@@ -79,13 +70,18 @@ Return ONLY a valid JSON object with exactly these fields:
 {{
     "skills": ["skill1", "skill2", ...],
     "role": "most suitable job title for this person",
-    "experience_years": <number or 0 if fresher>
+    "experience_years": <number>
 }}
 
 Rules:
-- skills: list of technical skills, tools, frameworks, languages
-- role: a specific job title like "Python Developer" or "Data Analyst"
-- experience_years: total years of work experience, use 0 if student or fresher
+- skills: list of technical skills, tools, frameworks, languages only
+- role: a specific job title like "Python Developer" or "GenAI Engineer"
+- experience_years: follow these rules strictly:
+  * If the person is a student or fresher with no work experience → use 0
+  * If experience is in months (e.g. 6 months, 8 months) → convert to decimal (6 months = 0.5, 8 months = 0.67)
+  * If experience is in years (e.g. 2 years) → use that number directly (2)
+  * If experience is mixed (e.g. 1 year 6 months) → convert to decimal (1.5)
+  * Always return a number, never a string
 - Return ONLY the JSON object, no explanation, no markdown, no extra text
 
 Resume:
@@ -94,7 +90,6 @@ Resume:
 
     raw = call_gemini(prompt)
 
-    # Strip markdown code blocks if Gemini adds them
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
@@ -110,7 +105,11 @@ Resume:
     if "skills" not in parsed or "role" not in parsed:
         raise ValueError(f"Gemini response missing required fields: {parsed}")
 
-    parsed["experience_years"] = int(parsed.get("experience_years", 0))
+    # Safely convert experience to float then store as float
+    try:
+        parsed["experience_years"] = float(parsed.get("experience_years", 0))
+    except (ValueError, TypeError):
+        parsed["experience_years"] = 0.0
 
     return parsed
 
@@ -119,13 +118,6 @@ def match_job_with_gemini(resume_profile: dict, job: dict) -> dict:
     """
     Scores a single job against the resume profile.
     Used in Milestone 4 — GET /match endpoint.
-
-    Returns:
-        {
-            "score": 87,
-            "matching_skills": ["Python", "FastAPI"],
-            "missing_skills": ["Docker", "Redis"]
-        }
     """
     prompt = f"""
 You are a job match analyzer.
