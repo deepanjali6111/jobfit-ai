@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from supabase import create_client
 
 # ── Auth guard ───────────────────────────────────────────────
 if not st.session_state.get("user_id"):
@@ -32,6 +33,34 @@ def format_experience(years) -> str:
         if months == 0:
             return f"{full_years} years"
         return f"{full_years} year(s) {months} month(s)"
+
+
+# ── Auto-load profile from DB if not in session ──────────────
+# This runs every time the page loads after login
+# Ensures returning users see their stored profile immediately
+if not st.session_state.get("profile") and st.session_state.get("jwt"):
+    try:
+        supabase = create_client(
+            st.secrets["SUPABASE_URL"],
+            st.secrets["SUPABASE_ANON_KEY"]
+        )
+        supabase.postgrest.auth(st.session_state.jwt)
+        result = (
+            supabase
+            .from_("resume_profiles")
+            .select("extracted_skills, target_role, experience_years")
+            .eq("user_id", st.session_state.user_id)
+            .single()
+            .execute()
+        )
+        if result.data:
+            st.session_state.profile = {
+                "skills":           result.data["extracted_skills"],
+                "role":             result.data["target_role"],
+                "experience_years": result.data["experience_years"]
+            }
+    except Exception:
+        pass  # No profile in DB yet — show upload form normally
 
 
 # ── Show current profile if exists ──────────────────────────
