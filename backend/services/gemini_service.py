@@ -60,10 +60,10 @@ def parse_resume_with_gemini(resume_text: str) -> dict:
         {
             "skills": ["Python", "FastAPI", ...],
             "role": "Backend Engineer",
-            "experience_years": 2
+            "experience_years": 0.5
         }
     """
-   prompt = f"""
+    prompt = f"""
 You are a resume parser. Extract information from the resume below.
 
 Return ONLY a valid JSON object with exactly these fields:
@@ -99,7 +99,6 @@ Resume:
     if "skills" not in parsed or "role" not in parsed:
         raise ValueError(f"Gemini response missing required fields: {parsed}")
 
-    # Safely convert experience to float then store as float
     try:
         parsed["experience_years"] = float(parsed.get("experience_years", 0))
     except (ValueError, TypeError):
