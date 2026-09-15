@@ -4,6 +4,7 @@ import time
 from datetime import datetime, date
 
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,7 +20,7 @@ GEMINI_KEYS = [
     os.getenv("GEMINI_KEY_3"),
 ]
 
-GEMINI_KEYS = [k for k in GEMINI_KEYS if k]
+GEMINI_KEYS = [key for key in GEMINI_KEYS if key]
 
 if not GEMINI_KEYS:
     raise ValueError("At least one GEMINI_KEY must be set in .env")
@@ -31,17 +32,16 @@ if not GEMINI_KEYS:
 
 def call_gemini(prompt: str) -> str:
     """
-    Calls Gemini with key rotation.
+    Calls Gemini with API key rotation.
 
-    Tries each available key in order.
-    On rate-limit/quota errors, waits 5 seconds before trying
-    the next key.
+    Tries each key in order.
+    If a key hits a rate/quota error, waits 5 seconds and
+    tries the next available key.
     """
 
     last_error = None
 
     for i, key in enumerate(GEMINI_KEYS):
-
         try:
             client = genai.Client(api_key=key)
 
@@ -53,12 +53,14 @@ def call_gemini(prompt: str) -> str:
             return response.text
 
         except Exception as e:
-
             last_error = e
             error_str = str(e).lower()
 
-            if "429" in str(e) or "quota" in error_str or "rate" in error_str:
-
+            if (
+                "429" in str(e)
+                or "quota" in error_str
+                or "rate" in error_str
+            ):
                 wait = 5 if i < len(GEMINI_KEYS) - 1 else 0
 
                 if wait:
@@ -75,59 +77,124 @@ def call_gemini(prompt: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# Calculate experience from employment dates
+# Date parsing helper
+# ─────────────────────────────────────────────────────────────
+
+def parse_year_month(value: str) -> date | None:
+    """
+    Converts YYYY-MM into a Python date.
+
+    Example:
+        "2025-11" -> date(2025, 11, 1)
+
+    Returns None for invalid/empty values.
+    """
+
+    if not value:
+        return None
+
+    value = str(value).strip()
+
+    try:
+        parsed = datetime.strptime(
+            value,
+            "%Y-%m"
+        )
+
+        return parsed.date()
+
+    except ValueError:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# Calculate total professional experience
 # ─────────────────────────────────────────────────────────────
 
 def calculate_experience_years(
-    experience_start: str,
-    experience_end: str
+    employment_periods: list[dict]
 ) -> float:
     """
-    Calculates professional experience in decimal years.
+    Calculates total professional experience from employment periods.
 
-    Examples:
-        6 months  -> 0.50
-        10 months -> 0.83
-        1 year    -> 1.00
-        1 year 6 months -> 1.50
+    Each period should contain:
 
-    Expected date format:
-        YYYY-MM
+        {
+            "start_date": "YYYY-MM",
+            "end_date": "YYYY-MM" or "present"
+        }
 
-    For ongoing employment:
-        experience_end = "present"
+    Multiple overlapping periods are merged so that the same month
+    is not counted twice.
+
+    Example:
+
+        Nov 2025 -> present
+        = approximately 10 months as of Sep 2026
+        = approximately 0.83 years
     """
 
-    if not experience_start:
-        return 0.0
+    intervals = []
 
-    try:
-        start_date = datetime.strptime(
-            experience_start,
-            "%Y-%m"
-        ).date()
+    today = date.today()
 
-        if str(experience_end).strip().lower() == "present":
-            end_date = date.today()
+    for period in employment_periods:
+        if not isinstance(period, dict):
+            continue
 
+        start_value = period.get("start_date", "")
+        end_value = period.get("end_date", "")
+
+        start_date = parse_year_month(start_value)
+
+        if start_date is None:
+            continue
+
+        if str(end_value).strip().lower() == "present":
+            end_date = today
         else:
-            end_date = datetime.strptime(
-                experience_end,
-                "%Y-%m"
-            ).date()
+            end_date = parse_year_month(end_value)
+
+        if end_date is None:
+            continue
 
         if end_date < start_date:
-            return 0.0
+            continue
 
-        months = (
-            (end_date.year - start_date.year) * 12
-            + (end_date.month - start_date.month)
-        )
+        # Convert dates to month numbers so we can calculate
+        # experience at month precision.
+        start_month = start_date.year * 12 + start_date.month
+        end_month = end_date.year * 12 + end_date.month
 
-        return round(months / 12, 2)
+        intervals.append((start_month, end_month))
 
-    except (ValueError, TypeError):
+    if not intervals:
         return 0.0
+
+    # Sort intervals by start month
+    intervals.sort(key=lambda x: x[0])
+
+    # Merge overlapping or adjacent employment periods
+    merged = []
+
+    current_start, current_end = intervals[0]
+
+    for next_start, next_end in intervals[1:]:
+        if next_start <= current_end + 1:
+            current_end = max(current_end, next_end)
+        else:
+            merged.append((current_start, current_end))
+            current_start = next_start
+            current_end = next_end
+
+    merged.append((current_start, current_end))
+
+    total_months = 0
+
+    for start_month, end_month in merged:
+        total_months += end_month - start_month
+
+    return round(total_months / 12, 2)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -136,13 +203,12 @@ def calculate_experience_years(
 
 def parse_resume_with_gemini(resume_text: str) -> dict:
     """
-    Extracts structured information from a resume.
+    Extracts resume information using Gemini.
 
     Gemini extracts:
         - skills
         - role
-        - employment start date
-        - employment end date
+        - employment periods
 
     Python calculates:
         - experience_years
@@ -151,124 +217,198 @@ def parse_resume_with_gemini(resume_text: str) -> dict:
     prompt = f"""
 You are a resume parser.
 
-Extract information from the resume below.
+Read the resume and extract the candidate's professional information.
 
-Return ONLY a valid JSON object with exactly these fields:
+Important:
+Do NOT calculate total years of experience yourself.
 
-{{
-    "skills": ["skill1", "skill2", "..."],
-    "role": "most suitable job title for this person",
-    "experience_start": "YYYY-MM",
-    "experience_end": "YYYY-MM"
-}}
+Instead, identify every genuine professional employment period
+and return its start and end dates.
 
 Rules:
 
-- skills:
-  Extract technical skills, programming languages, frameworks,
-  libraries, tools, databases, cloud technologies, APIs,
-  and relevant technical technologies.
+1. skills
+   - Extract technical skills, programming languages, frameworks,
+     libraries, databases, cloud technologies, APIs, tools,
+     and other relevant technical technologies.
+   - Do not invent skills.
 
-- role:
-  Choose the most suitable professional job title for the candidate.
-  Examples:
-  "AI Engineer"
-  "GenAI Engineer"
-  "Python Developer"
-  "Backend Engineer"
-  "Data Analyst"
+2. role
+   - Return the most suitable professional job title for the candidate.
+   - Examples:
+     "AI Engineer"
+     "GenAI Engineer"
+     "Python Developer"
+     "Backend Engineer"
 
-- experience_start:
-  Extract the start date of the candidate's professional employment.
-  Use YYYY-MM format.
+3. employment_periods
+   - Extract actual professional employment.
+   - Ignore:
+       * education
+       * academic projects
+       * certifications
+       * hackathons
+       * achievements
+       * college activities
+   - Include internships only when clearly presented as professional
+     work experience.
+   - Use YYYY-MM format.
+   - For an ongoing job, use "present".
+   - Do not invent dates.
+   - Extract ALL genuine employment periods.
 
-- experience_end:
-  Extract the end date of the candidate's latest/current professional
-  employment.
-  Use YYYY-MM format.
+Example:
 
-- If the latest job is still ongoing, use:
-  "present"
+If the resume contains:
 
-- Ignore:
-  internships,
-  academic projects,
-  college activities,
-  certifications,
-  education,
-  hackathons,
-  and achievements
-  when calculating professional employment dates.
+Cognizant Technology Solutions
+Nov 2025 – Present
 
-- Use the employment dates written in the resume.
-  Do not estimate or invent dates.
+return:
 
-- If the candidate has no professional work experience:
-  "experience_start": "",
-  "experience_end": ""
+[
+    {{
+        "start_date": "2025-11",
+        "end_date": "present"
+    }}
+]
 
-- Return ONLY the JSON object.
-- Do not return markdown.
-- Do not return ```json.
-- Do not add explanations.
+If there is no professional work experience, return an empty list.
 
 Resume:
 {resume_text}
 """
 
-    raw = call_gemini(prompt)
+    # Structured output schema
+    response_schema = {
+        "type": "OBJECT",
+        "properties": {
+            "skills": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "STRING"
+                }
+            },
+            "role": {
+                "type": "STRING"
+            },
+            "employment_periods": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "start_date": {
+                            "type": "STRING"
+                        },
+                        "end_date": {
+                            "type": "STRING"
+                        }
+                    },
+                    "required": [
+                        "start_date",
+                        "end_date"
+                    ]
+                }
+            }
+        },
+        "required": [
+            "skills",
+            "role",
+            "employment_periods"
+        ]
+    }
 
-    raw = raw.strip()
+    last_error = None
 
-    # Handle accidental markdown code fences anyway
-    if raw.startswith("```"):
+    for i, key in enumerate(GEMINI_KEYS):
+        try:
+            client = genai.Client(api_key=key)
 
-        parts = raw.split("```")
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=response_schema
+                )
+            )
 
-        if len(parts) >= 2:
-            raw = parts[1]
+            raw = response.text.strip()
 
-            if raw.startswith("json"):
-                raw = raw[4:]
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"Gemini returned invalid structured JSON: {raw[:500]}"
+                )
 
-    raw = raw.strip()
+            break
 
-    # Parse JSON
-    try:
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
 
-        parsed = json.loads(raw)
+            if (
+                "429" in str(e)
+                or "quota" in error_str
+                or "rate" in error_str
+            ):
+                wait = 5 if i < len(GEMINI_KEYS) - 1 else 0
 
-    except json.JSONDecodeError:
+                if wait:
+                    time.sleep(wait)
 
-        raise ValueError(
-            f"Gemini returned invalid JSON: {raw[:500]}"
+                continue
+
+            raise e
+
+    else:
+        raise RuntimeError(
+            "Daily AI quota reached. Results available again after midnight. "
+            "Your resume profile is saved — just come back tomorrow."
         )
 
     # Validate required fields
-    if "skills" not in parsed or "role" not in parsed:
+    if "skills" not in parsed:
         raise ValueError(
-            f"Gemini response missing required fields: {parsed}"
+            f"Gemini response missing skills: {parsed}"
         )
 
-    # Make sure optional date fields exist
-    experience_start = parsed.get(
-        "experience_start",
-        ""
-    )
+    if "role" not in parsed:
+        raise ValueError(
+            f"Gemini response missing role: {parsed}"
+        )
 
-    experience_end = parsed.get(
-        "experience_end",
-        ""
-    )
+    if "employment_periods" not in parsed:
+        raise ValueError(
+            f"Gemini response missing employment periods: {parsed}"
+        )
 
+    # Ensure correct types
+    if not isinstance(parsed["skills"], list):
+        parsed["skills"] = []
+
+    if not isinstance(parsed["employment_periods"], list):
+        parsed["employment_periods"] = []
+
+    # ─────────────────────────────────────────────────────────
     # Calculate experience in Python
-    # instead of trusting Gemini to calculate it.
+    # ─────────────────────────────────────────────────────────
+
     experience_years = calculate_experience_years(
-        experience_start,
-        experience_end
+        parsed["employment_periods"]
     )
 
     parsed["experience_years"] = experience_years
+
+    # Useful temporary backend diagnostic
+    print(
+        "Resume experience extraction:",
+        parsed["employment_periods"],
+        "=>",
+        experience_years,
+        "years"
+    )
 
     return parsed
 
@@ -283,7 +423,6 @@ def match_job_with_gemini(
 ) -> dict:
     """
     Scores a single job against the resume profile.
-    Used in the /match endpoint.
     """
 
     prompt = f"""
@@ -346,7 +485,6 @@ Rules:
     raw = raw.strip()
 
     if raw.startswith("```"):
-
         parts = raw.split("```")
 
         if len(parts) >= 2:
@@ -358,21 +496,30 @@ Rules:
     raw = raw.strip()
 
     try:
-
         parsed = json.loads(raw)
 
     except json.JSONDecodeError:
-
         return {
             "score": 0,
             "matching_skills": [],
             "missing_skills": []
         }
 
-    # Safely convert score
     try:
         parsed["score"] = int(parsed.get("score", 0))
     except (ValueError, TypeError):
         parsed["score"] = 0
+
+    if not isinstance(
+        parsed.get("matching_skills"),
+        list
+    ):
+        parsed["matching_skills"] = []
+
+    if not isinstance(
+        parsed.get("missing_skills"),
+        list
+    ):
+        parsed["missing_skills"] = []
 
     return parsed
