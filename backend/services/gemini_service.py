@@ -63,31 +63,25 @@ def parse_resume_with_gemini(resume_text: str) -> dict:
             "experience_years": 2
         }
     """
-    prompt = f"""
+   prompt = f"""
 You are a resume parser. Extract information from the resume below.
 
 Return ONLY a valid JSON object with exactly these fields:
 {{
     "skills": ["skill1", "skill2", ...],
     "role": "most suitable job title for this person",
-    "experience_years": <number>
+    "experience_years": <decimal number, e.g. 0.5 for 6 months, 1.5 for 1.5 years, 0 for fresher>
 }}
 
 Rules:
-- skills: list of technical skills, tools, frameworks, languages only
-- role: a specific job title like "Python Developer" or "GenAI Engineer"
-- experience_years: follow these rules strictly:
-  * If the person is a student or fresher with no work experience → use 0
-  * If experience is in months (e.g. 6 months, 8 months) → convert to decimal (6 months = 0.5, 8 months = 0.67)
-  * If experience is in years (e.g. 2 years) → use that number directly (2)
-  * If experience is mixed (e.g. 1 year 6 months) → convert to decimal (1.5)
-  * Always return a number, never a string
+- skills: list of technical skills, tools, frameworks, languages
+- role: a specific job title like "Python Developer" or "Data Analyst"
+- experience_years: decimal years of experience. 6 months = 0.5, 8 months = 0.67, 1 year = 1.0, 2 years = 2.0. Use 0 only if zero work experience.
 - Return ONLY the JSON object, no explanation, no markdown, no extra text
 
 Resume:
 {resume_text}
 """
-
     raw = call_gemini(prompt)
 
     raw = raw.strip()
