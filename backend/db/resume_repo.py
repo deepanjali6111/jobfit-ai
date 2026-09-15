@@ -2,7 +2,7 @@ from supabase import Client
 
 
 # ─────────────────────────────────────────────────────────────
-# Insert / update resume profile
+# Create / update resume profile
 # ─────────────────────────────────────────────────────────────
 
 def upsert_resume_profile(
@@ -14,16 +14,17 @@ def upsert_resume_profile(
     """
     Creates or updates the user's resume profile.
 
-    experience_years is stored as a decimal value.
+    experience_years is stored as a decimal number.
 
     Examples:
-        0.50 = 6 months
-        0.83 = 10 months
-        1.00 = 1 year
-        1.50 = 1 year 6 months
+
+        0.50 -> 6 months
+        0.83 -> approximately 10 months
+        1.00 -> 1 year
+        1.50 -> 1 year 6 months
     """
 
-    # Check whether the user already has a resume profile
+    # Check whether profile already exists
     existing = (
         client
         .table("resume_profiles")
@@ -35,7 +36,7 @@ def upsert_resume_profile(
     is_update = len(existing.data) > 0
 
     # ─────────────────────────────────────────────────────────
-    # Preserve decimal experience
+    # Get experience from parsed profile
     # ─────────────────────────────────────────────────────────
 
     experience_years = profile.get(
@@ -44,51 +45,57 @@ def upsert_resume_profile(
     )
 
     try:
-
         experience_years = float(
             experience_years
         )
-
     except (ValueError, TypeError):
+        experience_years = 0.0
 
+    # Prevent negative experience values
+    if experience_years < 0:
         experience_years = 0.0
 
     # ─────────────────────────────────────────────────────────
-    # Upsert profile
+    # Prepare database record
+    # ─────────────────────────────────────────────────────────
+
+    resume_data = {
+        "user_id": user_id,
+
+        "extracted_skills": profile.get(
+            "skills",
+            []
+        ),
+
+        "experience_years": experience_years,
+
+        "target_role": profile.get(
+            "role",
+            ""
+        ),
+
+        "raw_text": raw_text,
+    }
+
+    # ─────────────────────────────────────────────────────────
+    # Insert / update
     # ─────────────────────────────────────────────────────────
 
     result = (
         client
         .table("resume_profiles")
         .upsert(
-            {
-                "user_id": user_id,
-
-                "extracted_skills": profile.get(
-                    "skills",
-                    []
-                ),
-
-                "experience_years": experience_years,
-
-                "target_role": profile.get(
-                    "role",
-                    ""
-                ),
-
-                "raw_text": raw_text,
-            },
+            resume_data,
             on_conflict="user_id"
         )
         .execute()
     )
 
     # ─────────────────────────────────────────────────────────
-    # If resume was updated, old matches are no longer valid
+    # Delete old job matches when resume changes
     # ─────────────────────────────────────────────────────────
 
     if is_update:
-
         (
             client
             .table("job_matches")
@@ -112,8 +119,11 @@ def get_resume_profile(
     client: Client
 ) -> dict | None:
     """
-    Returns the user's stored resume profile.
-    Returns None if no profile exists.
+    Returns the user's resume profile.
+
+    Returns:
+        dict -> profile exists
+        None -> profile does not exist
     """
 
     result = (
