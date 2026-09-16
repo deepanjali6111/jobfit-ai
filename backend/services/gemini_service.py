@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from datetime import date
 from google import genai
 from dotenv import load_dotenv
 
@@ -63,8 +64,14 @@ def parse_resume_with_gemini(resume_text: str) -> dict:
             "experience_years": 2
         }
     """
+    # Anchor "today" explicitly — Gemini can't reliably know the current
+    # date on its own, so date-math (start date → now) needs this passed in.
+    current_date = date.today().isoformat()
+
     prompt = f"""
 You are a resume parser. Extract information from the resume below.
+
+TODAY'S DATE IS: {current_date}
 
 Return ONLY a valid JSON object with exactly these fields:
 {{
@@ -78,9 +85,19 @@ Rules:
 - role: a specific job title like "Python Developer" or "GenAI Engineer"
 - experience_years: follow these rules strictly:
   * If the person is a student or fresher with no work experience → use 0
-  * If experience is in months (e.g. 6 months, 8 months) → convert to decimal (6 months = 0.5, 8 months = 0.67)
-  * If experience is in years (e.g. 2 years) → use that number directly (2)
-  * If experience is mixed (e.g. 1 year 6 months) → convert to decimal (1.5)
+  * Look at the work experience / internship section for date ranges
+    (e.g. "Nov 2024 – Present", "Jan 2023 – Jun 2023", "March 2022 - Current").
+  * For any entry ending in "Present" / "Current" / "Ongoing", calculate the
+    exact duration by computing the difference between that entry's START
+    DATE and TODAY'S DATE ({current_date}) given above. Do NOT rely on
+    approximate phrases like "10 months" written elsewhere in the resume —
+    always compute it yourself from the actual start date to today.
+  * For past (non-current) roles with both a start and end date, calculate
+    the duration between those two dates directly.
+  * If there are multiple experience entries, sum the durations of all of
+    them (treat overlapping periods as counted once, not double-counted).
+  * Convert the final total duration to decimal years, rounded to 2 decimal
+    places (e.g. 10 months = 0.83, 1 year 6 months = 1.5, 2 years = 2.0).
   * Always return a number, never a string
 - Return ONLY the JSON object, no explanation, no markdown, no extra text
 
