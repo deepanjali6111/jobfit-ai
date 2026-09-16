@@ -16,25 +16,28 @@ st.caption("Upload your PDF resume and we'll extract your profile automatically.
 FASTAPI_URL = st.secrets["FASTAPI_URL"]
 
 
-def format_experience(exp) -> str:
-    if exp is None or exp == 0:
+def format_experience(years) -> str:
+    """Convert experience number to human readable string."""
+    if years is None or years == 0:
         return "Fresher"
-    elif exp < 1:
-        months = round(exp * 12)
+    elif years < 1:
+        months = round(years * 12)
         return f"{months} month(s)"
-    elif exp == 1:
+    elif years == 1:
         return "1 year"
-    elif exp % 1 == 0:
-        return f"{int(exp)} years"
+    elif years % 1 == 0:
+        return f"{int(years)} years"
     else:
-        full_years = int(exp)
-        months = round((exp - full_years) * 12)
+        full_years = int(years)
+        months = round((years - full_years) * 12)
         if months == 0:
             return f"{full_years} years"
         return f"{full_years} year(s) {months} month(s)"
 
 
 # ── Auto-load profile from DB if not in session ──────────────
+# This runs every time the page loads after login
+# Ensures returning users see their stored profile immediately
 if not st.session_state.get("profile") and st.session_state.get("jwt"):
     try:
         supabase = create_client(
@@ -57,10 +60,10 @@ if not st.session_state.get("profile") and st.session_state.get("jwt"):
                 "experience_years": result.data["experience_years"]
             }
     except Exception:
-        pass
+        pass  # No profile in DB yet — show upload form normally
 
 
-# ── Show current profile if exists ───────────────────────────
+# ── Show current profile if exists ──────────────────────────
 if st.session_state.get("profile"):
     profile = st.session_state.profile
     st.success("✅ Resume already uploaded.")
@@ -73,8 +76,7 @@ if st.session_state.get("profile"):
     st.divider()
     st.markdown("Upload a new resume below to replace your current profile.")
 
-
-# ── File uploader ─────────────────────────────────────────────
+# ── File uploader ────────────────────────────────────────────
 uploaded_file = st.file_uploader(
     "Choose your resume PDF",
     type=["pdf"],
@@ -82,7 +84,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-
+    # File size check — 10MB max
     if uploaded_file.size > 10 * 1024 * 1024:
         st.error("File too large. Please upload a PDF under 10MB.")
         st.stop()
@@ -94,13 +96,7 @@ if uploaded_file is not None:
             try:
                 response = requests.post(
                     f"{FASTAPI_URL}/upload",
-                    files={
-                        "file": (
-                            uploaded_file.name,
-                            uploaded_file.getvalue(),
-                            "application/pdf"
-                        )
-                    },
+                    files={"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")},
                     headers={"Authorization": f"Bearer {st.session_state.jwt}"},
                     timeout=60
                 )
@@ -108,12 +104,14 @@ if uploaded_file is not None:
                 if response.status_code == 200:
                     data = response.json()
 
+                    # Store profile in session for other pages
                     st.session_state.profile = {
                         "skills":           data["skills"],
                         "role":             data["role"],
                         "experience_years": data["experience_years"]
                     }
 
+                    # Clear old results when resume changes
                     if "ranked_jobs" in st.session_state:
                         del st.session_state.ranked_jobs
                     if "jobs" in st.session_state:
@@ -134,9 +132,7 @@ if uploaded_file is not None:
                         )
 
                     st.markdown("**Extracted Skills:**")
-                    skills_display = "  ".join(
-                        [f"`{skill}`" for skill in data["skills"]]
-                    )
+                    skills_display = "  ".join([f"`{skill}`" for skill in data["skills"]])
                     st.markdown(skills_display)
 
                     st.divider()
@@ -147,20 +143,17 @@ if uploaded_file is not None:
 
                 elif response.status_code == 401:
                     st.error("Session expired. Please log in again.")
-                    for key in list(st.session_state.keys()):
-                        del st.session_state[key]
-                    st.rerun()
+                    st.session_state.clear()
+                    st.switch_page("pages/1_login.py")
 
                 elif response.status_code == 503:
                     st.error(response.json()["detail"])
 
                 else:
-                    st.error(
-                        f"Upload failed: {response.json().get('detail', 'Unknown error')}"
-                    )
+                    st.error(f"Upload failed: {response.json().get('detail', 'Unknown error')}")
 
             except requests.exceptions.Timeout:
-                st.error("Request timed out. Please try again.")
+                st.error("Request timed out. The AI is taking too long. Please try again.")
 
             except requests.exceptions.ConnectionError:
                 st.error("Cannot connect to backend. Make sure FastAPI is running on port 8000.")
