@@ -83,21 +83,26 @@ Return ONLY a valid JSON object with exactly these fields:
 Rules:
 - skills: list of technical skills, tools, frameworks, languages only
 - role: a specific job title like "Python Developer" or "GenAI Engineer"
-- experience_years: follow these rules strictly:
-  * If the person is a student or fresher with no work experience → use 0
-  * Look at the work experience / internship section for date ranges
-    (e.g. "Nov 2024 – Present", "Jan 2023 – Jun 2023", "March 2022 - Current").
-  * For any entry ending in "Present" / "Current" / "Ongoing", calculate the
-    exact duration by computing the difference between that entry's START
-    DATE and TODAY'S DATE ({current_date}) given above. Do NOT rely on
-    approximate phrases like "10 months" written elsewhere in the resume —
-    always compute it yourself from the actual start date to today.
-  * For past (non-current) roles with both a start and end date, calculate
-    the duration between those two dates directly.
-  * If there are multiple experience entries, sum the durations of all of
-    them (treat overlapping periods as counted once, not double-counted).
-  * Convert the final total duration to decimal years, rounded to 2 decimal
-    places (e.g. 10 months = 0.83, 1 year 6 months = 1.5, 2 years = 2.0).
+- experience_years: follow these rules strictly, in this priority order:
+  1. First, look at the work experience / internship section for explicit
+     date ranges (e.g. "Nov 2024 – Present", "Jan 2023 – Jun 2023",
+     "March 2022 - Current").
+     - For any entry ending in "Present" / "Current" / "Ongoing", calculate
+       the exact duration by computing the difference between that entry's
+       START DATE and TODAY'S DATE ({current_date}) given above.
+     - For past (non-current) roles with both a start and end date,
+       calculate the duration between those two dates directly.
+     - If there are multiple such entries, sum their durations (treat
+       overlapping periods as counted once, not double-counted).
+  2. If NO explicit date range can be found anywhere in the resume, but the
+     resume explicitly states a duration in words (e.g. "10 months of
+     experience", "1.5 years experience", "6-month internship"), use that
+     stated duration directly instead of defaulting to 0. Do not assume
+     "fresher" just because dates are missing — only use 0 if there is
+     truly no experience of any kind mentioned (no dates AND no stated
+     duration AND no job/internship history at all).
+  3. Convert the final duration to decimal years, rounded to 2 decimal
+     places (e.g. 10 months = 0.83, 1 year 6 months = 1.5, 2 years = 2.0).
   * Always return a number, never a string
 - Return ONLY the JSON object, no explanation, no markdown, no extra text
 
